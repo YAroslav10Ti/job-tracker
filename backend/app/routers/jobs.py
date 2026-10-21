@@ -16,8 +16,8 @@ def create_job(payload: JobCreate, db = Depends(get_db)) -> JobResponse:
 
 
 @router.get("/", response_model=list[JobResponse])
-def get_jobs(db = Depends(get_db)) -> list[JobResponse]:
-    return get_jobs_service(db)
+def get_jobs(db = Depends(get_db), search: str | None = None) -> list[JobResponse]:
+    return get_jobs_service(db, search)
 
 
 @router.get("/{job_id}", response_model=JobResponse)

@@ -1,9 +1,8 @@
-from fastapi.middleware.cors import CORSMiddleware
 from app.schemas import JobCreate, JobResponse, JobUpdate
 from app.models import Job
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
-from app.repository.jobs import get_job_repository, create_job_repository, get_jobs_repository, delete_job_repository
+from app.repository.jobs import get_job_repository, create_job_repository, get_jobs_repository, delete_job_repository, get_job_by_name_repository
 
 
 def create_job_service(payload: JobCreate, db: Session) -> JobResponse:
@@ -29,8 +28,11 @@ def create_job_service(payload: JobCreate, db: Session) -> JobResponse:
 
 
 
-def get_jobs_service(db: Session) -> list[JobResponse]:
-    return get_jobs_repository(db)
+def get_jobs_service(db: Session, search: str | None = None) -> list[JobResponse]:
+    if search:
+        return get_job_by_name_repository(db, search)
+    else:
+        return get_jobs_repository(db)
 
 
 def get_job_service(job_id: int, db: Session) -> JobResponse:

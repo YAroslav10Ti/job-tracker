@@ -12,6 +12,9 @@ def create_job_repository(new_job: Job, db) -> JobResponse:
 def get_jobs_repository(db) -> list[JobResponse]:
     return db.query(Job).all()
 
+def get_job_by_name_repository(db, search: str) -> list[JobResponse]:
+    return db.query(Job).filter(Job.position.ilike(f"%{search}%")).all()
+
 
 def delete_job_repository(job: Job, db) -> JobResponse:
     db.delete(job)

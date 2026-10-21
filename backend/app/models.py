@@ -14,4 +14,4 @@ class Job(Base):
     position: Mapped[str] = mapped_column(String(150), nullable=False)
     url: Mapped[str | None] = mapped_column(String, nullable=True)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="interested")
-    notes: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    notes: Mapped[str] = mapped_column(Text, nullable=False, default="")        
