@@ -16,9 +16,10 @@ engine = create_engine(DATABASE_URL, echo=False)
 Base.metadata.create_all(bind=engine)
 
 SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
-db = SessionLocal()
 
 def get_db():
+    db = SessionLocal()
+
     try:
         yield db
     finally:
