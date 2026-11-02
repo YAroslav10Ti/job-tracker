@@ -1,8 +1,6 @@
 import os
 from dotenv import load_dotenv
-from sqlalchemy import create_engine
-from app.models import Base
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 load_dotenv()
 
@@ -11,16 +9,15 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 if DATABASE_URL is None:
     raise RuntimeError("DATABASE_URL is not set")
 
-engine = create_engine(DATABASE_URL, echo=False)
+ASYNC_DATABASE_URL = DATABASE_URL.replace(
+    "postgresql+psycopg://",
+    "postgresql+asyncpg://",
+)
 
-Base.metadata.create_all(bind=engine)
+engine = create_async_engine(ASYNC_DATABASE_URL, echo=False)
 
-SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+SessionLocal = async_sessionmaker(bind=engine, autocommit=False, autoflush=False)
 
-def get_db():
-    db = SessionLocal()
-
-    try:
+async def get_db():
+    async with SessionLocal() as db:
         yield db
-    finally:
-        db.close()

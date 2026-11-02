@@ -1,124 +1,292 @@
-
 <!DOCTYPE html>
 <html lang="ru">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Job Tracker — управление откликами на работу">
   <title>Job Tracker</title>
   <link rel="stylesheet" href="style.css">
   <script src="app.js" defer></script>
 </head>
 <body>
-  <header class="topbar">
-    <a class="brand" href="#">Job<span>Tracker</span></a>
-    <span class="subtitle">Твой поиск работы под контролем</span>
-  </header>
+  <div class="app-container">
 
-  <main class="container">
-    <section class="intro">
-      <div>
-        <p class="eyebrow">МОЯ КАРЬЕРА</p>
-        <h1>Вакансии и заметки</h1>
-        <p class="muted">Сохраняй интересные вакансии и следи за откликами.</p>
+    <!-- Авторизация -->
+    <section id="auth-section" class="auth-section">
+      <div class="auth-card">
+        <div class="auth-brand">
+          <div class="brand-icon">J</div>
+          <div>
+            <h1>Job Tracker</h1>
+            <p>Твой поиск работы под контролем</p>
+          </div>
+        </div>
+
+        <div class="auth-tabs">
+          <button id="login-tab" class="auth-tab active" type="button">
+            Войти
+          </button>
+          <button id="register-tab" class="auth-tab" type="button">
+            Регистрация
+          </button>
+        </div>
+
+        <div id="auth-message" class="message" role="alert" hidden></div>
+
+        <!-- Форма входа -->
+        <form id="login-form">
+          <div class="field">
+            <label for="login-email">Email</label>
+            <input
+              id="login-email"
+              name="email"
+              type="email"
+              autocomplete="email"
+              placeholder="you@example.com"
+              required
+            >
+          </div>
+
+          <div class="field">
+            <label for="login-password">Пароль</label>
+            <input
+              id="login-password"
+              name="password"
+              type="password"
+              autocomplete="current-password"
+              placeholder="Твой пароль"
+              required
+            >
+          </div>
+
+          <button id="login-button" class="button button-primary auth-submit" type="submit">
+            Войти
+          </button>
+        </form>
+
+        <!-- Форма регистрации -->
+        <form id="register-form" hidden>
+          <div class="field">
+            <label for="register-email">Email</label>
+            <input
+              id="register-email"
+              name="email"
+              type="email"
+              autocomplete="email"
+              placeholder="you@example.com"
+              required
+            >
+          </div>
+
+          <div class="field">
+            <label for="register-password">Пароль</label>
+            <input
+              id="register-password"
+              name="password"
+              type="password"
+              autocomplete="new-password"
+              minlength="8"
+              maxlength="128"
+              placeholder="Минимум 8 символов"
+              required
+            >
+            <p class="field-hint">Пароль должен содержать минимум 8 символов.</p>
+          </div>
+
+          <button id="register-button" class="button button-primary auth-submit" type="submit">
+            Создать аккаунт
+          </button>
+        </form>
+
+        <p class="auth-footer">
+          Твои вакансии доступны только после авторизации.
+        </p>
       </div>
-      <button id="add-button" class="primary-button" type="button">
-        + Добавить вакансию
-      </button>
     </section>
 
-    <section class="stats">
-      <article class="stat-card">
-        <span>Всего вакансий</span>
-        <strong id="total-count">0</strong>
-      </article>
-      <article class="stat-card">
-        <span>Отклики</span>
-        <strong id="applied-count">0</strong>
-      </article>
-      <article class="stat-card">
-        <span>Интервью</span>
-        <strong id="interview-count">0</strong>
-      </article>
-    </section>
+    <!-- Основное приложение -->
+    <div id="app-section" hidden>
 
-    <section class="toolbar">
-      <input
-        id="search"
-        type="search"
-        placeholder="Поиск по компании или должности..."
-      >
-      <select id="status-filter" aria-label="Фильтр по статусу">
-        <option value="all">Все статусы</option>
-        <option value="Заинтересован">Заинтересован</option>
-        <option value="Подана заявка">Подана заявка</option>
-        <option value="Собеседование">Собеседование</option>
-        <option value="Отклонена">Отклонена</option>
-      </select>
-    </section>
+      <header class="page-header">
+        <div>
+          <p class="eyebrow">ТВОЙ ПОИСК РАБОТЫ</p>
+          <h1>Job Tracker</h1>
+          <p class="subtitle">Все вакансии и отклики в одном месте.</p>
+        </div>
 
-    <section id="job-list" class="job-list"></section>
+        <div class="header-actions">
+          <button id="add-button" class="button button-primary" type="button">
+            <span aria-hidden="true">＋</span> Добавить вакансию
+          </button>
+          <button id="logout-button" class="button button-secondary" type="button">
+            Выйти
+          </button>
+        </div>
+      </header>
 
-    <form id="job-form" class="form-card hidden">
-      <h2 id="form-title">Новая вакансия</h2>
+      <section class="stats-grid" aria-label="Статистика вакансий">
+        <article class="stat-card">
+          <span class="stat-label">Всего вакансий</span>
+          <strong id="stat-total" class="stat-value">0</strong>
+          <span class="stat-description">В твоём списке</span>
+        </article>
 
-      <label>
-        Компания *
-        <input
-          name="company"
-          required
-          maxlength="100"
-          placeholder="Например, Яндекс"
-        >
-      </label>
+        <article class="stat-card">
+          <span class="stat-label">Подано заявок</span>
+          <strong id="stat-applied" class="stat-value">0</strong>
+          <span class="stat-description">Отправленные отклики</span>
+        </article>
 
-      <label>
-        Должность *
-        <input
-          name="position"
-          required
-          maxlength="150"
-          placeholder="Python Backend-разработчик"
-        >
-      </label>
+        <article class="stat-card">
+          <span class="stat-label">Собеседования</span>
+          <strong id="stat-interview" class="stat-value">0</strong>
+          <span class="stat-description">Следующий шаг к работе</span>
+        </article>
+      </section>
 
-      <label>
-        Ссылка на вакансию
-        <input name="url" type="url" placeholder="https://...">
-      </label>
+      <main>
+        <section class="toolbar" aria-label="Поиск и фильтры">
+          <div class="search-wrapper">
+            <label for="search">Поиск вакансий</label>
+            <input
+              id="search"
+              type="search"
+              placeholder="Компания, должность или заметки..."
+              autocomplete="off"
+            >
+          </div>
 
-      <label>
-        Статус
-        <select name="status">
-          <option value="Заинтересован">Заинтересован</option>
-          <option value="Подана заявка">Подана заявка</option>
-          <option value="Собеседование">Собеседование</option>
-          <option value="Отклонена">Отклонена</option>
-        </select>
-      </label>
+          <div class="filter-wrapper">
+            <label for="status-filter">Статус</label>
+            <select id="status-filter">
+              <option value="">Все статусы</option>
+              <option value="Заинтересован">Заинтересован</option>
+              <option value="Подана заявка">Подана заявка</option>
+              <option value="Собеседование">Собеседование</option>
+              <option value="Отклонена">Отклонена</option>
+            </select>
+          </div>
+        </section>
 
-      <label>
-        Заметки
-        <textarea
-          name="notes"
-          rows="4"
-          maxlength="5000"
-          placeholder="Требования, вопросы, подготовка к собеседованию..."
-        ></textarea>
-      </label>
+        <div id="message" class="message" role="status" aria-live="polite" hidden></div>
 
-      <div class="form-actions">
-        <button id="cancel-button" class="secondary-button" type="button">
-          Отмена
-        </button>
-        <button id="save-button" class="primary-button" type="submit">
-          Сохранить
-        </button>
-      </div>
-    </form>
+        <section class="jobs-section">
+          <div class="section-heading">
+            <div>
+              <h2>Мои вакансии</h2>
+              <p>Отслеживай каждый этап поиска работы.</p>
+            </div>
+            <span id="visible-count" class="results-count">0 вакансий</span>
+          </div>
 
-    <p id="message" class="message" role="status"></p>
-  </main>
+          <div id="job-list" class="job-list">
+            <div class="loading-state">Загружаем вакансии...</div>
+          </div>
+        </section>
 
-  <footer>JobTracker · Учебный проект для изучения backend-разработки</footer>
+        <!-- Форма создания и редактирования -->
+        <section id="form-section" class="form-section" hidden>
+          <div class="form-card">
+            <div class="form-heading">
+              <div>
+                <p class="eyebrow">КАРТОЧКА ВАКАНСИИ</p>
+                <h2 id="form-title">Добавить вакансию</h2>
+              </div>
+              <button
+                id="close-form-button"
+                class="icon-button"
+                type="button"
+                aria-label="Закрыть форму"
+              >×</button>
+            </div>
+
+            <form id="job-form">
+              <div class="form-grid">
+                <div class="field">
+                  <label for="company">Компания <span class="required">*</span></label>
+                  <input
+                    id="company"
+                    name="company"
+                    type="text"
+                    maxlength="100"
+                    placeholder="Например, Google"
+                    required
+                  >
+                </div>
+
+                <div class="field">
+                  <label for="position">Должность <span class="required">*</span></label>
+                  <input
+                    id="position"
+                    name="position"
+                    type="text"
+                    maxlength="150"
+                    placeholder="Например, Junior Python Developer"
+                    required
+                  >
+                </div>
+
+                <div class="field">
+                  <label for="url">Ссылка на вакансию</label>
+                  <input
+                    id="url"
+                    name="url"
+                    type="url"
+                    placeholder="https://example.com/job"
+                  >
+                </div>
+
+                <div class="field">
+                  <label for="status">Статус</label>
+                  <select id="status" name="status" required>
+                    <option value="Заинтересован">Заинтересован</option>
+                    <option value="Подана заявка">Подана заявка</option>
+                    <option value="Собеседование">Собеседование</option>
+                    <option value="Отклонена">Отклонена</option>
+                  </select>
+                </div>
+
+                <div class="field field-full">
+                  <label for="last_date">Дедлайн / дата</label>
+                  <input
+                    id="last_date"
+                    name="last_date"
+                    type="text"
+                    maxlength="100"
+                    placeholder="Например, 2026-11-15 или Неизвестно"
+                  >
+                  <p class="field-hint">Можно указать дату, текст или «Неизвестно».</p>
+                </div>
+
+                <div class="field field-full">
+                  <label for="notes">Заметки</label>
+                  <textarea
+                    id="notes"
+                    name="notes"
+                    rows="5"
+                    maxlength="5000"
+                    placeholder="Требования, контакт рекрутера, детали вакансии..."
+                  ></textarea>
+                </div>
+              </div>
+
+              <div class="form-actions">
+                <button id="cancel-button" class="button button-secondary" type="button">
+                  Отмена
+                </button>
+                <button id="save-button" class="button button-primary" type="submit">
+                  Сохранить вакансию
+                </button>
+              </div>
+            </form>
+          </div>
+        </section>
+      </main>
+
+      <footer class="page-footer">
+        <p>Job Tracker <span aria-hidden="true">·</span> Твой поиск работы под контролем</p>
+      </footer>
+    </div>
+  </div>
 </body>
 </html>

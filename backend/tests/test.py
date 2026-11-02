@@ -1,4 +1,6 @@
+
 from fastapi.testclient import TestClient
+
 from app.main import app
 
 
@@ -7,6 +9,7 @@ job_payload = {
     "position": "Python Developer",
     "url": "https://example.com/jobs/python-developer",
     "status": "Заинтересован",
+    "last_date": "2026-10-20",
     "notes": "Изучить требования к вакансии",
 }
 
@@ -17,9 +20,8 @@ def create_job(client, payload=None):
         "/api/jobs/",
         json=payload or job_payload,
     )
-    assert response.status_code == 201
+    assert response.status_code == 201, response.text
     return response.json()
-
 
 
 def test_health():
@@ -30,11 +32,10 @@ def test_health():
     assert response.status_code == 200
 
 
-
 def test_create_job(client):
     response = client.post("/api/jobs/", json=job_payload)
 
-    assert response.status_code == 201
+    assert response.status_code == 201, response.text
 
     data = response.json()
 
@@ -43,6 +44,7 @@ def test_create_job(client):
     assert data["position"] == job_payload["position"]
     assert data["url"] == job_payload["url"]
     assert data["status"] == job_payload["status"]
+    assert data["last_date"] == job_payload["last_date"]
     assert data["notes"] == job_payload["notes"]
 
 
@@ -54,13 +56,14 @@ def test_create_job_with_default_values(client):
 
     response = client.post("/api/jobs/", json=payload)
 
-    assert response.status_code == 201
+    assert response.status_code == 201, response.text
 
     data = response.json()
 
     assert data["company"] == "Yandex"
     assert data["position"] == "Backend Developer"
     assert data["status"] == "Заинтересован"
+    assert data["last_date"] == "Неизвестно"
     assert data["notes"] == ""
 
 
@@ -77,21 +80,19 @@ def test_create_job_with_invalid_status(client):
 
 
 def test_create_job_without_company(client):
-    payload = {
-        "position": "Python Developer",
-    }
-
-    response = client.post("/api/jobs/", json=payload)
+    response = client.post(
+        "/api/jobs/",
+        json={"position": "Python Developer"},
+    )
 
     assert response.status_code == 422
 
 
 def test_create_job_without_position(client):
-    payload = {
-        "company": "Google",
-    }
-
-    response = client.post("/api/jobs/", json=payload)
+    response = client.post(
+        "/api/jobs/",
+        json={"company": "Google"},
+    )
 
     assert response.status_code == 422
 
@@ -118,6 +119,15 @@ def test_create_job_with_too_long_company(client):
     assert response.status_code == 422
 
 
+def test_create_job_with_too_long_last_date(client):
+    payload = {
+        **job_payload,
+        "last_date": "A" * 101,
+    }
+
+    response = client.post("/api/jobs/", json=payload)
+
+    assert response.status_code == 422
 
 
 def test_get_jobs_empty_list(client):
@@ -135,6 +145,7 @@ def test_get_jobs(client):
         "position": "Backend Developer",
         "url": "https://example.com/yandex",
         "status": "Подана заявка",
+        "last_date": "2026-10-21",
         "notes": "Отправил резюме",
     }
     create_job(client, second_payload)
@@ -148,8 +159,7 @@ def test_get_jobs(client):
     assert len(data) == 2
     assert data[0]["company"] == "Google"
     assert data[1]["company"] == "Yandex"
-
-
+    assert data[1]["last_date"] == "2026-10-21"
 
 
 def test_search_jobs_by_position(client):
@@ -187,8 +197,6 @@ def test_search_jobs_without_matches(client):
     assert response.json() == []
 
 
-
-
 def test_get_job_by_id(client):
     created_job = create_job(client)
     job_id = created_job["id"]
@@ -202,6 +210,7 @@ def test_get_job_by_id(client):
     assert data["id"] == job_id
     assert data["company"] == job_payload["company"]
     assert data["position"] == job_payload["position"]
+    assert data["last_date"] == job_payload["last_date"]
 
 
 def test_get_nonexistent_job(client):
@@ -209,8 +218,6 @@ def test_get_nonexistent_job(client):
 
     assert response.status_code == 404
     assert response.json()["detail"] == "Job not found"
-
-
 
 
 def test_update_job(client):
@@ -221,6 +228,7 @@ def test_update_job(client):
         "company": "Google",
         "position": "Senior Python Developer",
         "status": "Собеседование",
+        "last_date": "2026-10-22",
         "notes": "Назначено техническое интервью",
     }
 
@@ -229,7 +237,7 @@ def test_update_job(client):
         json=update_payload,
     )
 
-    assert response.status_code == 200
+    assert response.status_code == 200, response.text
 
     data = response.json()
 
@@ -237,6 +245,7 @@ def test_update_job(client):
     assert data["company"] == "Google"
     assert data["position"] == "Senior Python Developer"
     assert data["status"] == "Собеседование"
+    assert data["last_date"] == "2026-10-22"
     assert data["notes"] == "Назначено техническое интервью"
 
 
@@ -256,6 +265,20 @@ def test_update_only_status(client):
     assert data["status"] == "Отклонена"
     assert data["company"] == job_payload["company"]
     assert data["position"] == job_payload["position"]
+    assert data["last_date"] == job_payload["last_date"]
+
+
+def test_update_only_last_date(client):
+    created_job = create_job(client)
+    job_id = created_job["id"]
+
+    response = client.patch(
+        f"/api/jobs/{job_id}",
+        json={"last_date": "2026-10-23"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["last_date"] == "2026-10-23"
 
 
 def test_update_nonexistent_job(client):
@@ -270,10 +293,9 @@ def test_update_nonexistent_job(client):
 
 def test_update_job_with_invalid_status(client):
     created_job = create_job(client)
-    job_id = created_job["id"]
 
     response = client.patch(
-        f"/api/jobs/{job_id}",
+        f"/api/jobs/{created_job['id']}",
         json={"status": "Неизвестный статус"},
     )
 
@@ -282,25 +304,33 @@ def test_update_job_with_invalid_status(client):
 
 def test_update_job_with_empty_company(client):
     created_job = create_job(client)
-    job_id = created_job["id"]
 
     response = client.patch(
-        f"/api/jobs/{job_id}",
+        f"/api/jobs/{created_job['id']}",
         json={"company": ""},
     )
 
     assert response.status_code == 422
 
 
+def test_update_job_with_too_long_last_date(client):
+    created_job = create_job(client)
+
+    response = client.patch(
+        f"/api/jobs/{created_job['id']}",
+        json={"last_date": "A" * 101},
+    )
+
+    assert response.status_code == 422
 
 
 def test_delete_job(client):
     created_job = create_job(client)
-    job_id = created_job["id"]
 
-    response = client.delete(f"/api/jobs/{job_id}")
+    response = client.delete(f"/api/jobs/{created_job['id']}")
 
     assert response.status_code == 200
+    assert response.json()["id"] == created_job["id"]
 
 
 def test_deleted_job_is_not_found(client):
