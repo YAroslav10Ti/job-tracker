@@ -1,4 +1,3 @@
-
 from sqlalchemy import Integer, String, Text, ForeignKey
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 

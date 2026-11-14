@@ -3,6 +3,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 
+
 JobStatus = Literal[
     "Заинтересован",
     "Подана заявка",
@@ -49,3 +50,17 @@ class UserResponse(BaseModel):
 class UserLoginResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
+
+
+
+class JobResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    company: str
+    position: str
+    url: str | None
+    status: str
+    last_date: str
+    notes: str
+    user_id: int
