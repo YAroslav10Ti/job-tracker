@@ -32,6 +32,8 @@ services:
         condition: service_healthy
       kafka:
         condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
 
   redis:
     image: redis:7-alpine
@@ -40,6 +42,25 @@ services:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
+      retries: 5
+
+
+  rabbitmq:
+    image: rabbitmq:4-management
+    container_name: job-tracker-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: jobtracker
+      RABBITMQ_DEFAULT_PASS: jobtracker_password
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+      - ./rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
       retries: 5
 
   worker:
@@ -54,6 +75,8 @@ services:
       db:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      rabbitmq:
         condition: service_healthy
 
   history-consumer:
@@ -120,6 +143,64 @@ services:
       retries: 10
       start_period: 20s
 
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: job-tracker-prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.retention.time=15d"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: job-tracker-grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+
+  redis-exporter:
+    image: oliver006/redis_exporter:latest
+    container_name: job-tracker-redis-exporter
+    environment:
+      REDIS_ADDR: redis://redis:6379
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  postgres-exporter:
+    image: quay.io/prometheuscommunity/postgres-exporter:latest
+    container_name: job-tracker-postgres-exporter
+    environment:
+      DATA_SOURCE_NAME: "postgresql://postgres:mysecretpassword@db:5432/job_tracker?sslmode=disable"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  celery-exporter:
+    image: ovalmoney/celery-exporter:latest
+    container_name: job-tracker-celery-exporter
+    command:
+      - "--broker-url=amqp://jobtracker:jobtracker_password@rabbitmq:5672//"
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+
 volumes:
   postgres_data:
   kafka_data:
+  rabbitmq_data:
+  prometheus_data:
+  grafana_data:

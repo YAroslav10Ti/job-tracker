@@ -2,6 +2,6 @@ from celery import Celery
 
 celery_app = Celery(
     "job_tracker",
-    broker="redis://redis:6379/1",
-    include=["app.tasks"], 
+    broker="amqp://jobtracker:jobtracker_password@rabbitmq:5672//",
+    include=["app.tasks"],
 )

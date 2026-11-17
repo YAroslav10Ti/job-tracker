@@ -135,25 +135,6 @@ async def get_user_history(db: AsyncSession = Depends(get_db), current_user = De
 
 
 
-@router.get("/redis-health")
-async def redis_health(
-    redis: Redis = Depends(get_redis)
-):
-    await redis.set("job_tracker:health_check", "Redis is working", ex=30)
-
-    value = await redis.get("job_tracker:health_check")
-
-    return {
-        "redis": "connected",
-        "test_value": value,
-    }
-
-
-
-
-
-
-
 
 
 @router.get("/{job_id}", response_model=JobResponse) 

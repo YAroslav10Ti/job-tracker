@@ -79,3 +79,4 @@ redis>=5,<7
 celery[redis]==5.5.3
 psycopg[binary]>=3.2,<4
 aiokafka>=0.12,<1
+prometheus-client==0.26.0
