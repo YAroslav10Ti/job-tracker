@@ -25,10 +25,7 @@ from app.dependencies.redis import get_statistics_redis
 from app.redis.statistics import acquire_statistics_lock
 from app.tasks import calculate_job_statistics
 from app.redis.statistics import get_job_statistics
-from fastapi import APIRouter, Depends
-from redis.asyncio import Redis
-
-from app.dependencies.auth import get_authenticated_user
+from fastapi import HTTPException
 
 
 logger = logging.getLogger(__name__)
@@ -119,7 +116,13 @@ async def login_user(payload: UserCreateLogin, db: AsyncSession = Depends(get_db
 
 
 @router.patch("/update")
-async def change_password(payload: UserCreateLogin, db: AsyncSession = Depends(get_db)) -> UserLoginResponse:
+async def change_password(
+    payload: UserCreateLogin,
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(get_authenticated_user),
+) -> UserLoginResponse:
+    if payload.email.lower() != current_user.email.lower():
+        raise HTTPException(status_code=403, detail="Forbidden")
     return await change_password_services(payload, db)
 
 
