@@ -18,8 +18,8 @@ services:
 
   api:
     build:
-      context: ./backend
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: backend/Dockerfile
     container_name: job-tracker-api
     env_file:
       - .env
@@ -44,7 +44,6 @@ services:
       timeout: 3s
       retries: 5
 
-
   rabbitmq:
     image: rabbitmq:4-management
     container_name: job-tracker-rabbitmq
@@ -65,8 +64,8 @@ services:
 
   worker:
     build:
-      context: ./backend
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: backend/Dockerfile
     container_name: job-tracker-worker
     env_file:
       - .env
@@ -81,8 +80,8 @@ services:
 
   history-consumer:
     build:
-      context: ./backend
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: backend/Dockerfile
     container_name: job-tracker-history-consumer
     env_file:
       - .env
@@ -94,11 +93,10 @@ services:
       kafka:
         condition: service_healthy
 
-
   insights-consumer:
     build:
-      context: ./backend
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: backend/Dockerfile
     container_name: job-tracker-insights-consumer
     env_file:
       - .env
@@ -142,7 +140,6 @@ services:
       timeout: 10s
       retries: 10
       start_period: 20s
-
 
   prometheus:
     image: prom/prometheus:latest

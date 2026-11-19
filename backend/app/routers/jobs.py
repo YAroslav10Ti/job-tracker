@@ -26,6 +26,8 @@ from app.redis.statistics import acquire_statistics_lock
 from app.tasks import calculate_job_statistics
 from app.redis.statistics import get_job_statistics
 from fastapi import HTTPException
+import os
+CELERY_ENABLED = os.getenv("CELERY_ENABLED", "false").lower() == "true"
 
 
 logger = logging.getLogger(__name__)
@@ -64,7 +66,7 @@ async def get_jobs(
             )
 
             # Если блокировка получена, отправляем задачу Celery
-            if lock_acquired:
+            if lock_acquired and CELERY_ENABLED:
                 calculate_job_statistics.delay(current_user.id)
 
         except Exception:

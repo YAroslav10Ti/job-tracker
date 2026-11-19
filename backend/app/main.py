@@ -19,6 +19,7 @@ from app.routers import insights
 from app.routers.jobs import router as jobs_router
 
 
+
 REQUEST_COUNT = Counter(
     "http_requests_total",
     "Total HTTP requests",
@@ -43,7 +44,11 @@ async def lifespan(app: FastAPI):
         decode_responses=True,
     )
 
-    await start_kafka_producer()
+    try:
+        await start_kafka_producer()
+        print("Kafka producer connected")
+    except Exception as exc:
+        print(f"Kafka producer failed to start (will work without Kafka): {exc}")
 
     try:
         await redis.ping()
@@ -71,12 +76,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5500",
-        "http://127.0.0.1:5500",
-        "http://localhost:5501",
-        "http://127.0.0.1:5501",
-    ],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -130,6 +130,10 @@ app.include_router(jobs_router)
 app.include_router(insights.router)
 
 
-@app.get("/")
-def root():
-    return {"message": "Job Tracker API is running"}
+from fastapi.staticfiles import StaticFiles
+
+app.mount(
+    "/",
+    StaticFiles(directory="/frontend", html=True, check_dir=False),
+    name="static",
+)
