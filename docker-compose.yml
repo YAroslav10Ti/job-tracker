@@ -1,13 +1,23 @@
+x-backend: &backend
+  build:
+    context: .
+    dockerfile: backend/Dockerfile
+  image: job-tracker-backend
+  env_file:
+    - .env
+  restart: unless-stopped
+
 services:
   db:
     image: postgres:18
     container_name: postgres-dev
+    restart: unless-stopped
     environment:
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: mysecretpassword
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Задайте POSTGRES_PASSWORD в .env}
       POSTGRES_DB: job_tracker
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql
     healthcheck:
@@ -17,14 +27,10 @@ services:
       retries: 5
 
   api:
-    build:
-      context: .
-      dockerfile: backend/Dockerfile
+    <<: *backend
     container_name: job-tracker-api
-    env_file:
-      - .env
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     depends_on:
       db:
         condition: service_healthy
@@ -34,10 +40,21 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://localhost:8000/metrics', timeout=3)"
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
 
   redis:
     image: redis:7-alpine
     container_name: job-tracker-redis
+    restart: unless-stopped
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -47,12 +64,13 @@ services:
   rabbitmq:
     image: rabbitmq:4-management
     container_name: job-tracker-rabbitmq
+    restart: unless-stopped
     environment:
-      RABBITMQ_DEFAULT_USER: jobtracker
-      RABBITMQ_DEFAULT_PASS: jobtracker_password
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-jobtracker}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?Задайте RABBITMQ_PASSWORD в .env}
     ports:
-      - "5672:5672"
-      - "15672:15672"
+      - "127.0.0.1:5672:5672"
+      - "127.0.0.1:15672:15672"
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
       - ./rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
@@ -63,13 +81,10 @@ services:
       retries: 5
 
   worker:
-    build:
-      context: .
-      dockerfile: backend/Dockerfile
+    <<: *backend
     container_name: job-tracker-worker
-    env_file:
-      - .env
-    command: celery -A app.celery_app.celery_app worker --loglevel=info
+    # -E включает события задач: без них celery-exporter не видит метрики задач
+    command: celery -A app.celery_app.celery_app worker --loglevel=info -E
     depends_on:
       db:
         condition: service_healthy
@@ -79,14 +94,9 @@ services:
         condition: service_healthy
 
   history-consumer:
-    build:
-      context: .
-      dockerfile: backend/Dockerfile
+    <<: *backend
     container_name: job-tracker-history-consumer
-    env_file:
-      - .env
     command: python -m app.kafka.consumers.history
-    restart: unless-stopped
     depends_on:
       redis:
         condition: service_healthy
@@ -94,14 +104,9 @@ services:
         condition: service_healthy
 
   insights-consumer:
-    build:
-      context: .
-      dockerfile: backend/Dockerfile
+    <<: *backend
     container_name: job-tracker-insights-consumer
-    env_file:
-      - .env
     command: python -m app.kafka.consumers.insights
-    restart: unless-stopped
     depends_on:
       redis:
         condition: service_healthy
@@ -111,8 +116,9 @@ services:
   kafka:
     image: apache/kafka:4.1.0
     container_name: job-tracker-kafka
+    restart: unless-stopped
     ports:
-      - "9092:9092"
+      - "127.0.0.1:9092:9092"
     environment:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
@@ -130,6 +136,9 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
 
+      # Ограничиваем память Kafka, чтобы стек помещался на небольшой VPS
+      KAFKA_HEAP_OPTS: "-Xms256m -Xmx512m"
+
     volumes:
       - kafka_data:/var/lib/kafka/data
     healthcheck:
@@ -144,6 +153,7 @@ services:
   prometheus:
     image: prom/prometheus:latest
     container_name: job-tracker-prometheus
+    restart: unless-stopped
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--storage.tsdb.retention.time=15d"
@@ -151,26 +161,29 @@ services:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus_data:/prometheus
     ports:
-      - "9090:9090"
+      - "127.0.0.1:9090:9090"
 
   grafana:
     image: grafana/grafana:latest
     container_name: job-tracker-grafana
+    restart: unless-stopped
     environment:
       GF_SECURITY_ADMIN_USER: admin
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:?Задайте GRAFANA_PASSWORD в .env}
+      GF_USERS_ALLOW_SIGN_UP: "false"
     volumes:
       - grafana_data:/var/lib/grafana
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
       - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     depends_on:
       - prometheus
 
   redis-exporter:
     image: oliver006/redis_exporter:latest
     container_name: job-tracker-redis-exporter
+    restart: unless-stopped
     environment:
       REDIS_ADDR: redis://redis:6379
     depends_on:
@@ -180,8 +193,9 @@ services:
   postgres-exporter:
     image: quay.io/prometheuscommunity/postgres-exporter:latest
     container_name: job-tracker-postgres-exporter
+    restart: unless-stopped
     environment:
-      DATA_SOURCE_NAME: "postgresql://postgres:mysecretpassword@db:5432/job_tracker?sslmode=disable"
+      DATA_SOURCE_NAME: "postgresql://postgres:${POSTGRES_PASSWORD}@db:5432/job_tracker?sslmode=disable"
     depends_on:
       db:
         condition: service_healthy
@@ -189,10 +203,31 @@ services:
   celery-exporter:
     image: ovalmoney/celery-exporter:latest
     container_name: job-tracker-celery-exporter
+    restart: unless-stopped
     command:
-      - "--broker-url=amqp://jobtracker:jobtracker_password@rabbitmq:5672//"
+      - "--broker-url=amqp://${RABBITMQ_USER:-jobtracker}:${RABBITMQ_PASSWORD}@rabbitmq:5672//"
     depends_on:
       rabbitmq:
+        condition: service_healthy
+
+  # HTTPS-прокси: единственный сервис, доступный из интернета.
+  # Запускается только с профилем prod.
+  caddy:
+    image: caddy:2
+    container_name: job-tracker-caddy
+    restart: unless-stopped
+    profiles: ["prod"]
+    environment:
+      DOMAIN: ${DOMAIN:-localhost}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      api:
         condition: service_healthy
 
 volumes:
@@ -201,3 +236,5 @@ volumes:
   rabbitmq_data:
   prometheus_data:
   grafana_data:
+  caddy_data:
+  caddy_config:

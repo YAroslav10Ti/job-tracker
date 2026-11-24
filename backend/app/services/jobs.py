@@ -11,12 +11,10 @@ from app.repository.jobs import (
     get_job_by_name_repository,
     get_current_user,
     create_new_user,
-    reset_new_password, 
     delete_user_repository
 )
 
 from app.security import verify_password, create_access_token
-from app.security import hash_password
 from app.redis.history import add_user_history, get_user_history
 from app.redis.rate_limit import check_rate_limit
 from app.schemas import JobResponse 
@@ -27,7 +25,6 @@ import logging
 
 from app.kafka.producer import send_event
 from app.kafka.schemas import JobEvent
-from redis.asyncio import Redis
 
 
 logger = logging.getLogger(__name__)
@@ -77,10 +74,8 @@ async def create_job_service(payload: JobCreate, db: AsyncSession, id: int, redi
         await db.rollback()
         raise HTTPException(status_code=500, detail="Failed to create job")
 
-    keys = await redis.keys(f"jobs:user:{id}:*")
-
-    if keys:
-        await redis.delete(*keys)
+    async for key in redis.scan_iter(f"jobs:user:{id}:*"):
+        await redis.delete(key)
 
     try:
         event = JobEvent(
@@ -209,10 +204,8 @@ async def update_job_service(
     # 6. Удаляем устаревший кэш Redis
     await redis.delete(f"job:user:{id}:{job_id}")
 
-    keys = await redis.keys(f"jobs:user:{id}:*")
-
-    if keys:
-        await redis.delete(*keys)
+    async for key in redis.scan_iter(f"jobs:user:{id}:*"):
+        await redis.delete(key)
 
     # 7. Отправляем событие в Kafka
     try:
@@ -290,10 +283,8 @@ async def delete_job_service(
     # Удаляем кэш Redis
     await redis.delete(f"job:user:{id}:{job_id}")
 
-    keys = await redis.keys(f"jobs:user:{id}:*")
-
-    if keys:
-        await redis.delete(*keys)
+    async for key in redis.scan_iter(f"jobs:user:{id}:*"):
+        await redis.delete(key)
 
     # Отправляем событие в Kafka
     try:
@@ -358,29 +349,29 @@ async def login_new_user(payload: UserCreateLogin, db: AsyncSession, redis: Redi
     }
 
 
-async def change_password_services(payload: UserCreateLogin, db: AsyncSession) -> UserLoginResponse:
-    current_user = await get_current_user(payload.email, db)
+# async def change_password_services(payload: UserCreateLogin, db: AsyncSession) -> UserLoginResponse:
+#     current_user = await get_current_user(payload.email, db)
 
-    if current_user is None:
-        raise HTTPException(status_code=400, detail="User is not exist")
+#     if current_user is None:
+#         raise HTTPException(status_code=400, detail="User is not exist")
 
-    hashed_password = hash_password(payload.password)
+#     hashed_password = hash_password(payload.password)
 
-    await reset_new_password(current_user, hashed_password, db)
+#     await reset_new_password(current_user, hashed_password, db)
 
-    try:
-        await db.commit()
-        await db.refresh(current_user)
-    except Exception:
-        await db.rollback()
-        raise HTTPException(status_code=500, detail="Failed to change password")
+#     try:
+#         await db.commit()
+#         await db.refresh(current_user)
+#     except Exception:
+#         await db.rollback()
+#         raise HTTPException(status_code=500, detail="Failed to change password")
 
-    access_token = create_access_token(current_user.id)
+#     access_token = create_access_token(current_user.id)
 
-    return {
-        "access_token": access_token,
-        "token_type": "bearer"
-    }
+#     return {
+#         "access_token": access_token,
+#         "token_type": "bearer"
+#     }
 
 
 async def delete_user_services(user: User, db: AsyncSession) -> dict:

@@ -9,8 +9,7 @@ from app.services.jobs import (
     update_job_service,
     delete_job_service,
     create_user, 
-    login_new_user, 
-    change_password_services, 
+    login_new_user,  
     delete_user_services,
     get_user_history_services
 )
@@ -27,6 +26,7 @@ from app.tasks import calculate_job_statistics
 from app.redis.statistics import get_job_statistics
 from fastapi import HTTPException
 import os
+import asyncio
 CELERY_ENABLED = os.getenv("CELERY_ENABLED", "false").lower() == "true"
 
 
@@ -67,7 +67,7 @@ async def get_jobs(
 
             # Если блокировка получена, отправляем задачу Celery
             if lock_acquired and CELERY_ENABLED:
-                calculate_job_statistics.delay(current_user.id)
+                await asyncio.to_thread(calculate_job_statistics.delay, current_user.id)
 
         except Exception:
             logger.exception(
@@ -117,15 +117,15 @@ async def login_user(payload: UserCreateLogin, db: AsyncSession = Depends(get_db
     return await login_new_user(payload, db, redis)
 
 
-@router.patch("/update")
-async def change_password(
-    payload: UserCreateLogin,
-    db: AsyncSession = Depends(get_db),
-    current_user = Depends(get_authenticated_user),
-) -> UserLoginResponse:
-    if payload.email.lower() != current_user.email.lower():
-        raise HTTPException(status_code=403, detail="Forbidden")
-    return await change_password_services(payload, db)
+# @router.patch("/update")
+# async def change_password(
+#     payload: UserCreateLogin,
+#     db: AsyncSession = Depends(get_db),
+#     current_user = Depends(get_authenticated_user),
+# ) -> UserLoginResponse:
+#     if payload.email.lower() != current_user.email.lower():
+#         raise HTTPException(status_code=403, detail="Forbidden")
+#     return await change_password_services(payload, db)
 
 
 @router.delete("/me")
