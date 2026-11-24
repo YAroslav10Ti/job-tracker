@@ -94,14 +94,14 @@ async def create_new_user(
 
 
 
-# async def reset_new_password(
-#     user: User,
-#     hashed_password: str,
-#     db: AsyncSession
-# ) -> User:
-#     user.hasheчцd_password = hashed_password
-#     db.add(user)
-#     return user
+async def reset_new_password(
+    user: User,
+    hashed_password: str,
+    db: AsyncSession
+) -> User:
+    user.hashed_password = hashed_password
+    db.add(user)
+    return user
 
 
 async def delete_user_repository(

@@ -1,7 +1,5 @@
+
 x-backend: &backend
-  build:
-    context: .
-    dockerfile: backend/Dockerfile
   image: job-tracker-backend
   env_file:
     - .env
@@ -28,6 +26,9 @@ services:
 
   api:
     <<: *backend
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
     container_name: job-tracker-api
     ports:
       - "127.0.0.1:8000:8000"

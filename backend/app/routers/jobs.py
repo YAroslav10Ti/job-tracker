@@ -1,4 +1,6 @@
-from fastapi import status, APIRouter
+import asyncio
+
+from fastapi import status, APIRouter, Query
 from app.schemas import JobCreate, JobResponse, JobUpdate, UserCreateLogin, UserResponse, UserLoginResponse
 from app.database import get_db
 from fastapi import Depends
@@ -8,8 +10,9 @@ from app.services.jobs import (
     get_job_service,
     update_job_service,
     delete_job_service,
-    create_user, 
-    login_new_user,  
+    create_user,
+    login_new_user,
+    change_password_services,
     delete_user_services,
     get_user_history_services
 )
@@ -19,15 +22,15 @@ from app.dependencies.auth import get_authenticated_user
 from app.dependencies.redis import get_redis
 from redis.asyncio import Redis
 
-import logging 
+import logging
 from app.dependencies.redis import get_statistics_redis
 from app.redis.statistics import acquire_statistics_lock
 from app.tasks import calculate_job_statistics
 from app.redis.statistics import get_job_statistics
 from fastapi import HTTPException
 import os
-import asyncio
 CELERY_ENABLED = os.getenv("CELERY_ENABLED", "false").lower() == "true"
+ALLOW_REGISTRATION = os.getenv("ALLOW_REGISTRATION", "true").lower() == "true"
 
 
 logger = logging.getLogger(__name__)
@@ -36,7 +39,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/api/jobs",
-    tags=["jobs"], 
+    tags=["jobs"],
 )
 
 
@@ -48,11 +51,11 @@ async def create_job(payload: JobCreate, db: AsyncSession = Depends(get_db), cur
 
 @router.get("/", response_model=list[JobResponse])
 async def get_jobs(
-    db: AsyncSession = Depends(get_db), 
-    current_user = Depends(get_authenticated_user), 
-    redis: Redis = Depends(get_redis), 
-    statistics_redis: Redis = Depends(get_statistics_redis), 
-    search: str | None = None
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(get_authenticated_user),
+    redis: Redis = Depends(get_redis),
+    statistics_redis: Redis = Depends(get_statistics_redis),
+    search: str | None = Query(default=None, max_length=100)
     ) -> list[Job]:
 
     jobs = await get_jobs_service(db, current_user.id, redis, search)
@@ -100,7 +103,7 @@ async def get_jobs_statistics(
         "statistics": statistics,
     }
 
-    
+
 
 
 
@@ -109,7 +112,9 @@ async def get_jobs_statistics(
 
 @router.post("/register")
 async def register_user(payload: UserCreateLogin, db: AsyncSession = Depends(get_db)) -> UserResponse:
-    return await create_user(payload, db)  
+    if not ALLOW_REGISTRATION:
+        raise HTTPException(status_code=403, detail="Registration is disabled")
+    return await create_user(payload, db)
 
 
 @router.post("/login")
@@ -117,20 +122,24 @@ async def login_user(payload: UserCreateLogin, db: AsyncSession = Depends(get_db
     return await login_new_user(payload, db, redis)
 
 
-# @router.patch("/update")
-# async def change_password(
-#     payload: UserCreateLogin,
-#     db: AsyncSession = Depends(get_db),
-#     current_user = Depends(get_authenticated_user),
-# ) -> UserLoginResponse:
-#     if payload.email.lower() != current_user.email.lower():
-#         raise HTTPException(status_code=403, detail="Forbidden")
-#     return await change_password_services(payload, db)
+@router.patch("/update")
+async def change_password(
+    payload: UserCreateLogin,
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(get_authenticated_user),
+) -> UserLoginResponse:
+    if payload.email.lower() != current_user.email.lower():
+        raise HTTPException(status_code=403, detail="Forbidden")
+    return await change_password_services(payload, db)
 
 
 @router.delete("/me")
-async def delete_user(db: AsyncSession = Depends(get_db), current_user = Depends(get_authenticated_user)) -> dict:
-    await delete_user_services(current_user, db)
+async def delete_user(
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(get_authenticated_user),
+    redis: Redis = Depends(get_redis),
+) -> dict:
+    await delete_user_services(current_user, db, redis)
     return {"message": "User deleted successfully"}
 
 @router.get("/history")
@@ -142,7 +151,7 @@ async def get_user_history(db: AsyncSession = Depends(get_db), current_user = De
 
 
 
-@router.get("/{job_id}", response_model=JobResponse) 
+@router.get("/{job_id}", response_model=JobResponse)
 async def get_job(job_id: int, db: AsyncSession = Depends(get_db), current_user = Depends(get_authenticated_user), redis: Redis = Depends(get_redis)) -> Job:
     return await get_job_service(job_id, db, redis, current_user.id)
 

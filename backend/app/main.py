@@ -3,6 +3,7 @@ import time
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, Response
+from fastapi.middleware.cors import CORSMiddleware
 from prometheus_client import (
     CONTENT_TYPE_LATEST,
     Counter,
@@ -73,6 +74,22 @@ app = FastAPI(
 )
 
 
+# Фронтенд отдаётся с того же домена, поэтому CORS по умолчанию не нужен.
+# Если понадобится: CORS_ORIGINS=https://my-domain.ru,https://other.ru
+cors_origins = [
+    origin.strip()
+    for origin in os.getenv("CORS_ORIGINS", "").split(",")
+    if origin.strip()
+]
+
+if cors_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=cors_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
 
 def _iter_leaf_routes(routes):

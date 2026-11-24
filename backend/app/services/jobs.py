@@ -11,13 +11,15 @@ from app.repository.jobs import (
     get_job_by_name_repository,
     get_current_user,
     create_new_user,
+    reset_new_password,
     delete_user_repository
 )
 
 from app.security import verify_password, create_access_token
+from app.security import hash_password
 from app.redis.history import add_user_history, get_user_history
 from app.redis.rate_limit import check_rate_limit
-from app.schemas import JobResponse 
+from app.schemas import JobResponse
 from app.models import User
 from redis.asyncio import Redis
 import json
@@ -25,9 +27,44 @@ import logging
 
 from app.kafka.producer import send_event
 from app.kafka.schemas import JobEvent
+from redis.asyncio import Redis
 
 
 logger = logging.getLogger(__name__)
+
+# Хеш-пустышка: проверяем пароль и тогда, когда пользователя нет,
+# чтобы по времени ответа нельзя было узнать, зарегистрирован ли email.
+_DUMMY_HASH = hash_password("not-a-real-password")
+
+
+async def invalidate_jobs_cache(
+    redis: Redis,
+    user_id: int,
+    job_id: int | None = None,
+) -> None:
+    """Сбрасывает кеш списков вакансий пользователя (и одной вакансии)."""
+    keys = [
+        key
+        async for key in redis.scan_iter(match=f"jobs:user:{user_id}:*", count=100)
+    ]
+
+    if job_id is not None:
+        keys.append(f"job:user:{user_id}:{job_id}")
+
+    if keys:
+        await redis.delete(*keys)
+
+
+async def purge_user_cache(redis: Redis, user_id: int) -> None:
+    """Удаляет весь кеш вакансий пользователя (при удалении аккаунта)."""
+    keys = []
+
+    for pattern in (f"jobs:user:{user_id}:*", f"job:user:{user_id}:*"):
+        async for key in redis.scan_iter(match=pattern, count=100):
+            keys.append(key)
+
+    if keys:
+        await redis.delete(*keys)
 
 
 
@@ -71,11 +108,11 @@ async def create_job_service(payload: JobCreate, db: AsyncSession, id: int, redi
         await db.commit()
         await db.refresh(new_job)
     except Exception:
+        logger.exception("Failed to create job")
         await db.rollback()
         raise HTTPException(status_code=500, detail="Failed to create job")
 
-    async for key in redis.scan_iter(f"jobs:user:{id}:*"):
-        await redis.delete(key)
+    await invalidate_jobs_cache(redis, id)
 
     try:
         event = JobEvent(
@@ -101,13 +138,15 @@ async def create_job_service(payload: JobCreate, db: AsyncSession, id: int, redi
 
 
 async def get_jobs_service(#---------------------------------------------------------
-        db: AsyncSession, 
-        id: int, 
-        redis: Redis, 
+        db: AsyncSession,
+        id: int,
+        redis: Redis,
         search: str | None = None
     ) -> list[JobResponse]:
 
-    cache_key = f"jobs:user:{id}:{search or 'all'}"
+    cache_key = (
+        f"jobs:user:{id}:search:{search}" if search else f"jobs:user:{id}:list"
+    )
     cached_jobs = await redis.get(cache_key)
 
     if cached_jobs is not None:
@@ -139,7 +178,7 @@ async def get_jobs_service(#----------------------------------------------------
 async def get_job_service(job_id: int, db: AsyncSession, redis: Redis, id: int) -> JobResponse:#---------------------------------------------------------
     cache_key = f"job:user:{id}:{job_id}"
 
-    cached_job = await redis.get(cache_key) 
+    cached_job = await redis.get(cache_key)
 
     if cached_job is not None:
         jobs_data = json.loads(cached_job)
@@ -195,17 +234,12 @@ async def update_job_service(
         await db.refresh(current_job)
 
     except Exception:
+        logger.exception("Failed to update job")
         await db.rollback()
-        raise HTTPException(
-            status_code=500,
-            detail="Failed to update job"
-        )
+        raise HTTPException(status_code=500, detail="Failed to update job")
 
     # 6. Удаляем устаревший кэш Redis
-    await redis.delete(f"job:user:{id}:{job_id}")
-
-    async for key in redis.scan_iter(f"jobs:user:{id}:*"):
-        await redis.delete(key)
+    await invalidate_jobs_cache(redis, id, job_id)
 
     # 7. Отправляем событие в Kafka
     try:
@@ -238,7 +272,7 @@ async def update_job_service(
     return JobResponse.model_validate(current_job)
 
 
-    
+
 
 
 async def delete_job_service(
@@ -274,17 +308,12 @@ async def delete_job_service(
         await db.commit()
 
     except Exception:
+        logger.exception("Failed to delete job")
         await db.rollback()
-        raise HTTPException(
-            status_code=500,
-            detail="Failed to delete job"
-        )
+        raise HTTPException(status_code=500, detail="Failed to delete job")
 
     # Удаляем кэш Redis
-    await redis.delete(f"job:user:{id}:{job_id}")
-
-    async for key in redis.scan_iter(f"jobs:user:{id}:*"):
-        await redis.delete(key)
+    await invalidate_jobs_cache(redis, id, job_id)
 
     # Отправляем событие в Kafka
     try:
@@ -312,15 +341,16 @@ async def create_user(payload: UserCreateLogin, db: AsyncSession) -> UserRespons
 
     if current_user is not None:
         raise HTTPException(status_code=400, detail="User is already exist")
-    
+
     try:
         new_user = await create_new_user(payload, db)
         await db.commit()
         await db.refresh(new_user)
         return new_user
     except Exception:
+        logger.exception("Failed to create user")
         await db.rollback()
-        raise HTTPException(status_code=500, detail="Failed to create user") 
+        raise HTTPException(status_code=500, detail="Failed to create user")
 
 
 
@@ -335,11 +365,17 @@ async def login_new_user(payload: UserCreateLogin, db: AsyncSession, redis: Redi
 
     current_user = await get_current_user(payload.email, db)
 
+    invalid_credentials = HTTPException(
+        status_code=400,
+        detail="Invalid email or password",
+    )
+
     if current_user is None:
-        raise HTTPException(status_code=400, detail="User is not exist")
+        verify_password(payload.password, _DUMMY_HASH)
+        raise invalid_credentials
 
     if not verify_password(payload.password, current_user.hashed_password):
-        raise HTTPException(status_code=400, detail="Password is wrong")
+        raise invalid_credentials
 
     access_token = create_access_token(current_user.id)
 
@@ -349,39 +385,54 @@ async def login_new_user(payload: UserCreateLogin, db: AsyncSession, redis: Redi
     }
 
 
-# async def change_password_services(payload: UserCreateLogin, db: AsyncSession) -> UserLoginResponse:
-#     current_user = await get_current_user(payload.email, db)
+async def change_password_services(payload: UserCreateLogin, db: AsyncSession) -> UserLoginResponse:
+    current_user = await get_current_user(payload.email, db)
 
-#     if current_user is None:
-#         raise HTTPException(status_code=400, detail="User is not exist")
+    if current_user is None:
+        raise HTTPException(status_code=400, detail="User is not exist")
 
-#     hashed_password = hash_password(payload.password)
+    hashed_password = hash_password(payload.password)
 
-#     await reset_new_password(current_user, hashed_password, db)
+    await reset_new_password(current_user, hashed_password, db)
 
-#     try:
-#         await db.commit()
-#         await db.refresh(current_user)
-#     except Exception:
-#         await db.rollback()
-#         raise HTTPException(status_code=500, detail="Failed to change password")
+    try:
+        await db.commit()
+        await db.refresh(current_user)
+    except Exception:
+        logger.exception("Failed to change password")
+        await db.rollback()
+        raise HTTPException(status_code=500, detail="Failed to change password")
 
-#     access_token = create_access_token(current_user.id)
+    access_token = create_access_token(current_user.id)
 
-#     return {
-#         "access_token": access_token,
-#         "token_type": "bearer"
-#     }
+    return {
+        "access_token": access_token,
+        "token_type": "bearer"
+    }
 
 
-async def delete_user_services(user: User, db: AsyncSession) -> dict:
+async def delete_user_services(
+    user: User,
+    db: AsyncSession,
+    redis: Redis | None = None,
+) -> dict:
+    user_id = user.id
+
     try:
         await delete_user_repository(user, db)
         await db.commit()
-        return {"message": "User deleted successfully"}
     except Exception:
+        logger.exception("Failed to delete user: user_id=%s", user_id)
         await db.rollback()
         raise HTTPException(status_code=500, detail="Failed to delete user")
+
+    if redis is not None:
+        try:
+            await purge_user_cache(redis, user_id)
+        except Exception:
+            logger.exception("Failed to purge cache: user_id=%s", user_id)
+
+    return {"message": "User deleted successfully"}
 
 
 async def get_user_history_services(redis: Redis, user_id: int) -> list[dict]:
@@ -394,7 +445,7 @@ async def get_user_history_services(redis: Redis, user_id: int) -> list[dict]:
             user_id
         )
         raise HTTPException(status_code=500, detail="Failed to retrieve user history")
-    
+
 
 
 
@@ -431,11 +482,11 @@ async def get_user_insights(
         "interview_rate": interview_rate,
         "rejection_rate": rejection_rate,
     }
-    
-    
 
 
-        
+
+
+
 
 
 
