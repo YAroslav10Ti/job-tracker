@@ -1,15 +1,27 @@
 
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 x-backend: &backend
+  build:
+    context: .
+    dockerfile: backend/Dockerfile
   image: job-tracker-backend
   env_file:
     - .env
   restart: unless-stopped
+  logging: *logging
 
 services:
   db:
     image: postgres:18
     container_name: postgres-dev
+    mem_limit: 512m
     restart: unless-stopped
+    logging: *logging
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Задайте POSTGRES_PASSWORD в .env}
@@ -26,10 +38,8 @@ services:
 
   api:
     <<: *backend
-    build:
-      context: .
-      dockerfile: backend/Dockerfile
     container_name: job-tracker-api
+    mem_limit: 512m
     ports:
       - "127.0.0.1:8000:8000"
     depends_on:
@@ -55,7 +65,10 @@ services:
   redis:
     image: redis:7-alpine
     container_name: job-tracker-redis
+    mem_limit: 160m
+    command: redis-server --maxmemory 128mb --maxmemory-policy volatile-lru
     restart: unless-stopped
+    logging: *logging
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -65,7 +78,9 @@ services:
   rabbitmq:
     image: rabbitmq:4-management
     container_name: job-tracker-rabbitmq
+    mem_limit: 512m
     restart: unless-stopped
+    logging: *logging
     environment:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-jobtracker}
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?Задайте RABBITMQ_PASSWORD в .env}
@@ -84,8 +99,9 @@ services:
   worker:
     <<: *backend
     container_name: job-tracker-worker
+    mem_limit: 384m
     # -E включает события задач: без них celery-exporter не видит метрики задач
-    command: celery -A app.celery_app.celery_app worker --loglevel=info -E
+    command: celery -A app.celery_app.celery_app worker --loglevel=info -E --concurrency=2
     depends_on:
       db:
         condition: service_healthy
@@ -97,6 +113,7 @@ services:
   history-consumer:
     <<: *backend
     container_name: job-tracker-history-consumer
+    mem_limit: 256m
     command: python -m app.kafka.consumers.history
     depends_on:
       redis:
@@ -107,6 +124,7 @@ services:
   insights-consumer:
     <<: *backend
     container_name: job-tracker-insights-consumer
+    mem_limit: 256m
     command: python -m app.kafka.consumers.insights
     depends_on:
       redis:
@@ -117,7 +135,9 @@ services:
   kafka:
     image: apache/kafka:4.1.0
     container_name: job-tracker-kafka
+    mem_limit: 768m
     restart: unless-stopped
+    logging: *logging
     ports:
       - "127.0.0.1:9092:9092"
     environment:
@@ -154,7 +174,10 @@ services:
   prometheus:
     image: prom/prometheus:latest
     container_name: job-tracker-prometheus
+    mem_limit: 256m
+    profiles: ["monitoring"]
     restart: unless-stopped
+    logging: *logging
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--storage.tsdb.retention.time=15d"
@@ -167,7 +190,10 @@ services:
   grafana:
     image: grafana/grafana:latest
     container_name: job-tracker-grafana
+    mem_limit: 256m
+    profiles: ["monitoring"]
     restart: unless-stopped
+    logging: *logging
     environment:
       GF_SECURITY_ADMIN_USER: admin
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:?Задайте GRAFANA_PASSWORD в .env}
@@ -184,7 +210,10 @@ services:
   redis-exporter:
     image: oliver006/redis_exporter:latest
     container_name: job-tracker-redis-exporter
+    mem_limit: 128m
+    profiles: ["monitoring"]
     restart: unless-stopped
+    logging: *logging
     environment:
       REDIS_ADDR: redis://redis:6379
     depends_on:
@@ -194,7 +223,10 @@ services:
   postgres-exporter:
     image: quay.io/prometheuscommunity/postgres-exporter:latest
     container_name: job-tracker-postgres-exporter
+    mem_limit: 128m
+    profiles: ["monitoring"]
     restart: unless-stopped
+    logging: *logging
     environment:
       DATA_SOURCE_NAME: "postgresql://postgres:${POSTGRES_PASSWORD}@db:5432/job_tracker?sslmode=disable"
     depends_on:
@@ -204,7 +236,10 @@ services:
   celery-exporter:
     image: ovalmoney/celery-exporter:latest
     container_name: job-tracker-celery-exporter
+    mem_limit: 128m
+    profiles: ["monitoring"]
     restart: unless-stopped
+    logging: *logging
     command:
       - "--broker-url=amqp://${RABBITMQ_USER:-jobtracker}:${RABBITMQ_PASSWORD}@rabbitmq:5672//"
     depends_on:
@@ -216,7 +251,9 @@ services:
   caddy:
     image: caddy:2
     container_name: job-tracker-caddy
+    mem_limit: 128m
     restart: unless-stopped
+    logging: *logging
     profiles: ["prod"]
     environment:
       DOMAIN: ${DOMAIN:-localhost}

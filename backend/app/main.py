@@ -68,9 +68,14 @@ async def lifespan(app: FastAPI):
         print("Redis connections closed")
 
 
+ENABLE_DOCS = os.getenv("ENABLE_DOCS", "false").lower() == "true"
+
 app = FastAPI(
     title="Job Tracker API",
     lifespan=lifespan,
+    docs_url="/docs" if ENABLE_DOCS else None,
+    redoc_url=None,
+    openapi_url="/openapi.json" if ENABLE_DOCS else None,
 )
 
 

@@ -13,6 +13,9 @@ REDIS_STATISTICS_URL = os.getenv("REDIS_STATISTICS_URL")
 if not SECRET_KEY:
     raise RuntimeError("SECRET_KEY is not set")
 
+if len(SECRET_KEY) < 32:
+    raise RuntimeError("SECRET_KEY must be at least 32 characters")
+
 if not REDIS_URL:
     raise RuntimeError("REDIS_URL is not set")
 

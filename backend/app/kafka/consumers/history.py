@@ -1,3 +1,4 @@
+import os
 
 import asyncio
 import logging
@@ -12,7 +13,7 @@ from app.redis.history import add_user_history
 
 logger = logging.getLogger(__name__)
 
-KAFKA_BOOTSTRAP_SERVERS = "kafka:9092"
+KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
 KAFKA_TOPIC = "jobs"
 CONSUMER_GROUP = "history-group"
 

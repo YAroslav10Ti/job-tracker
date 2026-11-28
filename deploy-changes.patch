@@ -1,0 +1,1000 @@
+diff --git a/.dockerignore b/.dockerignore
+new file mode 100644
+index 0000000..0cec1d0
+--- /dev/null
++++ b/.dockerignore
+@@ -0,0 +1,11 @@
++.git
++.env
++.env.*
++!.env.example
++.venv
++venv
++__MACOSX
++**/__pycache__
++**/*.pyc
++**/.pytest_cache
++backend/tests
+diff --git a/.env.example b/.env.example
+index 4ae8151..aec3adf 100644
+--- a/.env.example
++++ b/.env.example
+@@ -27,6 +27,8 @@ KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+ SECRET_KEY=CHANGE_ME
+ # На сервере после создания демо-аккаунта поставьте false
+ ALLOW_REGISTRATION=true
++# Swagger (/docs) только для разработки, на сервере false
++ENABLE_DOCS=false
+ # Пусто = CORS выключен
+ CORS_ORIGINS=
+ 
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index ae13c89..365179b 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -19,5 +19,40 @@ jobs:
+       - uses: actions/setup-python@v5
+         with:
+           python-version: "3.12"
+-      - run: pip install -r requirements.txt pytest pytest-asyncio fakeredis
+-      - run: pytest -q
+\ No newline at end of file
++      - run: pip install -r requirements-dev.txt
++      - run: pytest -q
++
++  deploy-check:
++    runs-on: ubuntu-latest
++    needs: test
++    services:
++      postgres:
++        image: postgres:18
++        env:
++          POSTGRES_PASSWORD: ci
++          POSTGRES_DB: job_tracker
++        ports: ["5432:5432"]
++        options: >-
++          --health-cmd "pg_isready -U postgres"
++          --health-interval 5s --health-retries 5
++    steps:
++      - uses: actions/checkout@v4
++      - uses: actions/setup-python@v5
++        with:
++          python-version: "3.12"
++      - run: pip install -r backend/requirements-dev.txt
++      - name: Миграции и сверка моделей
++        working-directory: backend
++        env:
++          DATABASE_URL: postgresql+asyncpg://postgres:ci@localhost:5432/job_tracker
++          SECRET_KEY: ci-test-secret-key-that-is-at-least-32-bytes-long
++          REDIS_URL: redis://localhost:6379/0
++          REDIS_STATISTICS_URL: redis://localhost:6379/2
++        run: |
++          alembic upgrade head
++          alembic check
++      - name: Проверка compose и сборка образа
++        run: |
++          cp .env.example .env
++          docker compose --profile prod config -q
++          docker build -f backend/Dockerfile -t job-tracker-backend:ci .
+diff --git a/.gitignore b/.gitignore
+index e54dd9e..f2d9960 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -22,4 +22,7 @@ venv/
+ 
+ # Test coverage
+ .coverage
+-htmlcov/
+\ No newline at end of file
++htmlcov/
++
++# Бэкапы БД
++backups/
+diff --git a/Caddyfile b/Caddyfile
+index 2ad2b39..96c2853 100644
+--- a/Caddyfile
++++ b/Caddyfile
+@@ -7,6 +7,8 @@
+ 	respond @internal 404
+ 
+ 	header {
++		Strict-Transport-Security "max-age=31536000; includeSubDomains"
++		Content-Security-Policy "default-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+ 		X-Content-Type-Options nosniff
+ 		Referrer-Policy strict-origin-when-cross-origin
+ 		X-Frame-Options DENY
+diff --git a/README.md b/README.md
+index 8b13789..51252f9 100644
+--- a/README.md
++++ b/README.md
+@@ -1 +1,77 @@
++# Job Tracker
+ 
++Сервис для учёта откликов на вакансии. Пользователь регистрируется, ведёт список вакансий со статусами и видит статистику и историю действий.
++
++Проект сделан как pet-проект для демонстрации backend-навыков: REST API, фоновые задачи, события, кеш, мониторинг и деплой.
++
++## Стек
++
++- **Backend:** Python 3.12, FastAPI, SQLAlchemy 2 (async), Alembic, Pydantic
++- **Данные:** PostgreSQL 18, Redis 7 (кеш, блокировки, лимиты, статистика)
++- **Фоновые задачи:** Celery + RabbitMQ 4
++- **События:** Kafka (два независимых консьюмера: история действий и инсайты)
++- **Авторизация:** JWT, bcrypt, ограничение числа попыток входа
++- **Мониторинг:** метрики FastAPI, Prometheus, экспортеры, Grafana (дашборд хранится в репозитории)
++- **Инфраструктура:** Docker Compose, Caddy (HTTPS), GitHub Actions (тесты и проверка миграций)
++
++## Архитектура
++
++```
++Браузер ──HTTPS──► Caddy ──► FastAPI (API + статика фронтенда)
++                              │  ├─ PostgreSQL   (вакансии, пользователи)
++                              │  ├─ Redis        (кеш, блокировки, лимиты)
++                              │  ├─ RabbitMQ ──► Celery worker (пересчёт статистики)
++                              │  └─ Kafka ──► history-consumer, insights-consumer
++Prometheus ◄── метрики ── API, RabbitMQ, Redis, PostgreSQL, Celery   (профиль monitoring)
++Grafana    ◄── Prometheus                                            (профиль monitoring)
++```
++
++Список вакансий не ждёт пересчёта статистики: расчёт уходит в фоновую задачу. Redis-блокировка на 60 секунд не даёт ставить дубликаты задач для одного пользователя.
++
++## Локальный запуск
++
++```bash
++cp .env.example .env          # заполните пароли и SECRET_KEY, ENABLE_DOCS=true для Swagger
++docker compose up -d --build
++```
++
++- Фронтенд: http://localhost:8000
++- Swagger (при `ENABLE_DOCS=true`): http://localhost:8000/docs
++- Мониторинг: `docker compose --profile monitoring up -d`, Grafana на http://localhost:3000
++
++Ключ `SECRET_KEY` генерируется командой `python -c "import secrets; print(secrets.token_hex(32))"`.
++
++## Тесты
++
++```bash
++cd backend
++pip install -r requirements-dev.txt
++pytest -q
++```
++
++Тесты используют SQLite в памяти и fakeredis, внешние сервисы для них не нужны. В CI дополнительно проверяются миграции Alembic и `alembic check`.
++
++## Деплой
++
++Сервер: Linux с Docker и Docker Compose, домен, направленный на IP сервера.
++
++```bash
++git clone https://github.com/YAroslav10Ti/job-tracker.git /opt/job-tracker
++cd /opt/job-tracker
++cp .env.example .env          # DOMAIN=ваш.домен, новые пароли, ENABLE_DOCS=false
++docker compose --profile prod up -d --build
++```
++
++Caddy получает сертификат Let's Encrypt автоматически. Порты баз данных и брокеров привязаны к `127.0.0.1` и наружу не открыты.
++
++Бэкап базы: `scripts/backup.sh` (дамп в `backups/`, cron-строка в начале файла). Восстановление проверено на тестовой базе.
++
++## Демо
++
++Демо-аккаунт: `demo@ваш.домен` / пароль: `____`. Регистрация на демо-сервере отключена.
++
++## Что не сделано
++
++- Нет высокой доступности: один сервер, одна копия каждого сервиса.
++- Нет автоматического деплоя (CD): выкладка вручную по командам выше.
++- Нет интеграционных тестов с реальными PostgreSQL, Redis и Kafka в CI.
+diff --git a/backend/app/core/config.py b/backend/app/core/config.py
+index ae91440..b137085 100644
+--- a/backend/app/core/config.py
++++ b/backend/app/core/config.py
+@@ -13,6 +13,9 @@ REDIS_STATISTICS_URL = os.getenv("REDIS_STATISTICS_URL")
+ if not SECRET_KEY:
+     raise RuntimeError("SECRET_KEY is not set")
+ 
++if len(SECRET_KEY) < 32:
++    raise RuntimeError("SECRET_KEY must be at least 32 characters")
++
+ if not REDIS_URL:
+     raise RuntimeError("REDIS_URL is not set")
+ 
+diff --git a/backend/app/kafka/consumers/history.py b/backend/app/kafka/consumers/history.py
+index 52b2049..4006fb4 100644
+--- a/backend/app/kafka/consumers/history.py
++++ b/backend/app/kafka/consumers/history.py
+@@ -1,3 +1,4 @@
++import os
+ 
+ import asyncio
+ import logging
+@@ -12,7 +13,7 @@ from app.redis.history import add_user_history
+ 
+ logger = logging.getLogger(__name__)
+ 
+-KAFKA_BOOTSTRAP_SERVERS = "kafka:9092"
++KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
+ KAFKA_TOPIC = "jobs"
+ CONSUMER_GROUP = "history-group"
+ 
+diff --git a/backend/app/kafka/consumers/insights.py b/backend/app/kafka/consumers/insights.py
+index c4286cf..188f8a5 100644
+--- a/backend/app/kafka/consumers/insights.py
++++ b/backend/app/kafka/consumers/insights.py
+@@ -1,3 +1,4 @@
++import os
+ 
+ import asyncio
+ import logging
+@@ -11,7 +12,7 @@ from app.kafka.schemas import JobEvent
+ 
+ logger = logging.getLogger(__name__)
+ 
+-KAFKA_BOOTSTRAP_SERVERS = "kafka:9092"
++KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
+ KAFKA_TOPIC = "jobs"
+ CONSUMER_GROUP = "insights-group"
+ 
+diff --git a/backend/app/kafka/producer.py b/backend/app/kafka/producer.py
+index 5058bc9..f5d73d1 100644
+--- a/backend/app/kafka/producer.py
++++ b/backend/app/kafka/producer.py
+@@ -1,3 +1,4 @@
++import os
+ # создаем producer для отправки сообщений в Kafka
+ 
+ 
+@@ -6,7 +7,7 @@ from aiokafka import AIOKafkaProducer
+ from app.kafka.schemas import JobEvent 
+ 
+ 
+-KAFKA_BOOTSTRAP_SERVERS = "kafka:9092"
++KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
+ 
+ producer: AIOKafkaProducer | None = None
+ 
+diff --git a/backend/app/main.py b/backend/app/main.py
+index 90d470a..e3845f8 100644
+--- a/backend/app/main.py
++++ b/backend/app/main.py
+@@ -68,9 +68,14 @@ async def lifespan(app: FastAPI):
+         print("Redis connections closed")
+ 
+ 
++ENABLE_DOCS = os.getenv("ENABLE_DOCS", "false").lower() == "true"
++
+ app = FastAPI(
+     title="Job Tracker API",
+     lifespan=lifespan,
++    docs_url="/docs" if ENABLE_DOCS else None,
++    redoc_url=None,
++    openapi_url="/openapi.json" if ENABLE_DOCS else None,
+ )
+ 
+ 
+diff --git a/backend/app/redis/rate_limit.py b/backend/app/redis/rate_limit.py
+index 265fabc..cdf4385 100644
+--- a/backend/app/redis/rate_limit.py
++++ b/backend/app/redis/rate_limit.py
+@@ -1,16 +1,10 @@
+ from redis.asyncio import Redis
+ 
+ 
+-async def check_rate_limit(
+-    redis: Redis,
+-    key: str,
+-    limit: int,
+-    window: int
+-) -> bool:
+-
+-    current = await redis.incr(key)
+-
+-    if current == 1:
+-        await redis.expire(key, window)
+-
+-    return current <= limit
+\ No newline at end of file
++async def check_rate_limit(redis: Redis, key: str, limit: int, window: int) -> bool:
++    # INCR и EXPIRE NX в одной транзакции: ключ всегда получает TTL
++    async with redis.pipeline(transaction=True) as pipe:
++        pipe.incr(key)
++        pipe.expire(key, window, nx=True)
++        current, _ = await pipe.execute()
++    return current <= limit
+diff --git a/backend/requirements.txt b/backend/requirements.txt
+index c35af88..8ceb2ab 100644
+--- a/backend/requirements.txt
++++ b/backend/requirements.txt
+@@ -1,5 +1,3 @@
+-agent-detector==2.0.0
+-aiosqlite==0.22.1
+ alembic==1.20.0
+ annotated-doc==0.0.5
+ annotated-types==0.8.0
+@@ -17,16 +15,12 @@ dnspython==2.9.0
+ email-validator==2.3.0
+ fastapi==0.149.0
+ fastapi-cli==0.0.32
+-fastapi-cloud-cli==0.26.0
+-fastar==0.12.0
+ googleapis-common-protos==1.75.5
+ greenlet==3.5.6
+ h11==0.16.0
+ httpcore==1.0.9
+-httpcore2==2.14.0
+ httptools==0.9.0
+ httpx==0.28.1
+-httpx2==2.14.0
+ idna==3.20
+ iniconfig==2.3.1
+ Jinja2==3.1.6
+@@ -53,16 +47,12 @@ pydantic-settings==2.16.0
+ pydantic_core==2.50.1
+ Pygments==2.21.0
+ PyJWT==2.15.1
+-pytest==9.1.1
+-pytest-asyncio==1.4.0
+ python-dotenv==1.2.4
+ python-multipart==0.0.32
+ PyYAML==6.0.3
+ requests==2.34.2
+ rich==15.0.0
+ rich-toolkit==0.20.6
+-rignore==0.8.1
+-sentry-sdk==2.72.0
+ shellingham==1.5.4
+ SQLAlchemy==2.1.5
+ starlette==1.9.0
+@@ -74,10 +64,8 @@ urllib3==2.8.0
+ uvicorn==0.54.0
+ uvloop==0.23.0
+ watchfiles==1.3.0
+-websockets==17.3
+ redis>=5,<7
+ celery[redis]==5.5.3
+ psycopg[binary]>=3.2,<4
+ aiokafka>=0.12,<1
+ prometheus-client==0.26.0
+-fakeredis
+diff --git a/backend/tests/conftest.py b/backend/tests/conftest.py
+index fd39f09..4bd5bce 100644
+--- a/backend/tests/conftest.py
++++ b/backend/tests/conftest.py
+@@ -1,7 +1,7 @@
+ import os
+ 
+ os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///:memory:"
+-os.environ.setdefault("SECRET_KEY", "test-secret")
++os.environ.setdefault("SECRET_KEY", "test-secret-key-that-is-at-least-32-bytes-long")
+ os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
+ os.environ.setdefault("REDIS_STATISTICS_URL", "redis://localhost:6379/2")
+ 
+diff --git a/backend/tests/test.py b/backend/tests/test.py
+deleted file mode 100644
+index f627ceb..0000000
+--- a/backend/tests/test.py
++++ /dev/null
+@@ -1,354 +0,0 @@
+-
+-from fastapi.testclient import TestClient
+-
+-from app.main import app
+-
+-
+-job_payload = {
+-    "company": "Google",
+-    "position": "Python Developer",
+-    "url": "https://example.com/jobs/python-developer",
+-    "status": "Заинтересован",
+-    "last_date": "2026-10-20",
+-    "notes": "Изучить требования к вакансии",
+-}
+-
+-
+-def create_job(client, payload=None):
+-    """Вспомогательная функция для создания вакансии."""
+-    response = client.post(
+-        "/api/jobs/",
+-        json=payload or job_payload,
+-    )
+-    assert response.status_code == 201, response.text
+-    return response.json()
+-
+-
+-def test_health():
+-    client = TestClient(app)
+-
+-    response = client.get("/")
+-
+-    assert response.status_code == 200
+-
+-
+-def test_create_job(client):
+-    response = client.post("/api/jobs/", json=job_payload)
+-
+-    assert response.status_code == 201, response.text
+-
+-    data = response.json()
+-
+-    assert data["id"] is not None
+-    assert data["company"] == job_payload["company"]
+-    assert data["position"] == job_payload["position"]
+-    assert data["url"] == job_payload["url"]
+-    assert data["status"] == job_payload["status"]
+-    assert data["last_date"] == job_payload["last_date"]
+-    assert data["notes"] == job_payload["notes"]
+-
+-
+-def test_create_job_with_default_values(client):
+-    payload = {
+-        "company": "Yandex",
+-        "position": "Backend Developer",
+-    }
+-
+-    response = client.post("/api/jobs/", json=payload)
+-
+-    assert response.status_code == 201, response.text
+-
+-    data = response.json()
+-
+-    assert data["company"] == "Yandex"
+-    assert data["position"] == "Backend Developer"
+-    assert data["status"] == "Заинтересован"
+-    assert data["last_date"] == "Неизвестно"
+-    assert data["notes"] == ""
+-
+-
+-def test_create_job_with_invalid_status(client):
+-    payload = {
+-        "company": "Google",
+-        "position": "Python Developer",
+-        "status": "ошибка",
+-    }
+-
+-    response = client.post("/api/jobs/", json=payload)
+-
+-    assert response.status_code == 422
+-
+-
+-def test_create_job_without_company(client):
+-    response = client.post(
+-        "/api/jobs/",
+-        json={"position": "Python Developer"},
+-    )
+-
+-    assert response.status_code == 422
+-
+-
+-def test_create_job_without_position(client):
+-    response = client.post(
+-        "/api/jobs/",
+-        json={"company": "Google"},
+-    )
+-
+-    assert response.status_code == 422
+-
+-
+-def test_create_job_with_empty_company(client):
+-    payload = {
+-        "company": "",
+-        "position": "Python Developer",
+-    }
+-
+-    response = client.post("/api/jobs/", json=payload)
+-
+-    assert response.status_code == 422
+-
+-
+-def test_create_job_with_too_long_company(client):
+-    payload = {
+-        "company": "A" * 101,
+-        "position": "Python Developer",
+-    }
+-
+-    response = client.post("/api/jobs/", json=payload)
+-
+-    assert response.status_code == 422
+-
+-
+-def test_create_job_with_too_long_last_date(client):
+-    payload = {
+-        **job_payload,
+-        "last_date": "A" * 101,
+-    }
+-
+-    response = client.post("/api/jobs/", json=payload)
+-
+-    assert response.status_code == 422
+-
+-
+-def test_get_jobs_empty_list(client):
+-    response = client.get("/api/jobs/")
+-
+-    assert response.status_code == 200
+-    assert response.json() == []
+-
+-
+-def test_get_jobs(client):
+-    create_job(client)
+-
+-    second_payload = {
+-        "company": "Yandex",
+-        "position": "Backend Developer",
+-        "url": "https://example.com/yandex",
+-        "status": "Подана заявка",
+-        "last_date": "2026-10-21",
+-        "notes": "Отправил резюме",
+-    }
+-    create_job(client, second_payload)
+-
+-    response = client.get("/api/jobs/")
+-
+-    assert response.status_code == 200
+-
+-    data = response.json()
+-
+-    assert len(data) == 2
+-    assert data[0]["company"] == "Google"
+-    assert data[1]["company"] == "Yandex"
+-    assert data[1]["last_date"] == "2026-10-21"
+-
+-
+-def test_search_jobs_by_position(client):
+-    create_job(client)
+-
+-    second_payload = {
+-        "company": "Yandex",
+-        "position": "Java Developer",
+-        "status": "Подана заявка",
+-    }
+-    create_job(client, second_payload)
+-
+-    response = client.get(
+-        "/api/jobs/",
+-        params={"search": "Python"},
+-    )
+-
+-    assert response.status_code == 200
+-
+-    data = response.json()
+-
+-    assert len(data) == 1
+-    assert data[0]["position"] == "Python Developer"
+-
+-
+-def test_search_jobs_without_matches(client):
+-    create_job(client)
+-
+-    response = client.get(
+-        "/api/jobs/",
+-        params={"search": "Несуществующая компания"},
+-    )
+-
+-    assert response.status_code == 200
+-    assert response.json() == []
+-
+-
+-def test_get_job_by_id(client):
+-    created_job = create_job(client)
+-    job_id = created_job["id"]
+-
+-    response = client.get(f"/api/jobs/{job_id}")
+-
+-    assert response.status_code == 200
+-
+-    data = response.json()
+-
+-    assert data["id"] == job_id
+-    assert data["company"] == job_payload["company"]
+-    assert data["position"] == job_payload["position"]
+-    assert data["last_date"] == job_payload["last_date"]
+-
+-
+-def test_get_nonexistent_job(client):
+-    response = client.get("/api/jobs/99999")
+-
+-    assert response.status_code == 404
+-    assert response.json()["detail"] == "Job not found"
+-
+-
+-def test_update_job(client):
+-    created_job = create_job(client)
+-    job_id = created_job["id"]
+-
+-    update_payload = {
+-        "company": "Google",
+-        "position": "Senior Python Developer",
+-        "status": "Собеседование",
+-        "last_date": "2026-10-22",
+-        "notes": "Назначено техническое интервью",
+-    }
+-
+-    response = client.patch(
+-        f"/api/jobs/{job_id}",
+-        json=update_payload,
+-    )
+-
+-    assert response.status_code == 200, response.text
+-
+-    data = response.json()
+-
+-    assert data["id"] == job_id
+-    assert data["company"] == "Google"
+-    assert data["position"] == "Senior Python Developer"
+-    assert data["status"] == "Собеседование"
+-    assert data["last_date"] == "2026-10-22"
+-    assert data["notes"] == "Назначено техническое интервью"
+-
+-
+-def test_update_only_status(client):
+-    created_job = create_job(client)
+-    job_id = created_job["id"]
+-
+-    response = client.patch(
+-        f"/api/jobs/{job_id}",
+-        json={"status": "Отклонена"},
+-    )
+-
+-    assert response.status_code == 200
+-
+-    data = response.json()
+-
+-    assert data["status"] == "Отклонена"
+-    assert data["company"] == job_payload["company"]
+-    assert data["position"] == job_payload["position"]
+-    assert data["last_date"] == job_payload["last_date"]
+-
+-
+-def test_update_only_last_date(client):
+-    created_job = create_job(client)
+-    job_id = created_job["id"]
+-
+-    response = client.patch(
+-        f"/api/jobs/{job_id}",
+-        json={"last_date": "2026-10-23"},
+-    )
+-
+-    assert response.status_code == 200
+-    assert response.json()["last_date"] == "2026-10-23"
+-
+-
+-def test_update_nonexistent_job(client):
+-    response = client.patch(
+-        "/api/jobs/99999",
+-        json={"status": "Собеседование"},
+-    )
+-
+-    assert response.status_code == 404
+-    assert response.json()["detail"] == "Job not found"
+-
+-
+-def test_update_job_with_invalid_status(client):
+-    created_job = create_job(client)
+-
+-    response = client.patch(
+-        f"/api/jobs/{created_job['id']}",
+-        json={"status": "Неизвестный статус"},
+-    )
+-
+-    assert response.status_code == 422
+-
+-
+-def test_update_job_with_empty_company(client):
+-    created_job = create_job(client)
+-
+-    response = client.patch(
+-        f"/api/jobs/{created_job['id']}",
+-        json={"company": ""},
+-    )
+-
+-    assert response.status_code == 422
+-
+-
+-def test_update_job_with_too_long_last_date(client):
+-    created_job = create_job(client)
+-
+-    response = client.patch(
+-        f"/api/jobs/{created_job['id']}",
+-        json={"last_date": "A" * 101},
+-    )
+-
+-    assert response.status_code == 422
+-
+-
+-def test_delete_job(client):
+-    created_job = create_job(client)
+-
+-    response = client.delete(f"/api/jobs/{created_job['id']}")
+-
+-    assert response.status_code == 200
+-    assert response.json()["id"] == created_job["id"]
+-
+-
+-def test_deleted_job_is_not_found(client):
+-    created_job = create_job(client)
+-    job_id = created_job["id"]
+-
+-    delete_response = client.delete(f"/api/jobs/{job_id}")
+-
+-    assert delete_response.status_code == 200
+-
+-    get_response = client.get(f"/api/jobs/{job_id}")
+-
+-    assert get_response.status_code == 404
+-    assert get_response.json()["detail"] == "Job not found"
+-
+-
+-def test_delete_nonexistent_job(client):
+-    response = client.delete("/api/jobs/99999")
+-
+-    assert response.status_code == 404
+-    assert response.json()["detail"] == "Job not found"
+diff --git a/docker-compose.yml b/docker-compose.yml
+index dc532aa..a3b1ff5 100644
+--- a/docker-compose.yml
++++ b/docker-compose.yml
+@@ -1,15 +1,27 @@
+ 
++x-logging: &logging
++  driver: json-file
++  options:
++    max-size: "10m"
++    max-file: "3"
++
+ x-backend: &backend
++  build:
++    context: .
++    dockerfile: backend/Dockerfile
+   image: job-tracker-backend
+   env_file:
+     - .env
+   restart: unless-stopped
++  logging: *logging
+ 
+ services:
+   db:
+     image: postgres:18
+     container_name: postgres-dev
++    mem_limit: 512m
+     restart: unless-stopped
++    logging: *logging
+     environment:
+       POSTGRES_USER: postgres
+       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Задайте POSTGRES_PASSWORD в .env}
+@@ -26,10 +38,8 @@ services:
+ 
+   api:
+     <<: *backend
+-    build:
+-      context: .
+-      dockerfile: backend/Dockerfile
+     container_name: job-tracker-api
++    mem_limit: 512m
+     ports:
+       - "127.0.0.1:8000:8000"
+     depends_on:
+@@ -55,7 +65,10 @@ services:
+   redis:
+     image: redis:7-alpine
+     container_name: job-tracker-redis
++    mem_limit: 160m
++    command: redis-server --maxmemory 128mb --maxmemory-policy volatile-lru
+     restart: unless-stopped
++    logging: *logging
+     healthcheck:
+       test: ["CMD", "redis-cli", "ping"]
+       interval: 5s
+@@ -65,7 +78,9 @@ services:
+   rabbitmq:
+     image: rabbitmq:4-management
+     container_name: job-tracker-rabbitmq
++    mem_limit: 512m
+     restart: unless-stopped
++    logging: *logging
+     environment:
+       RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-jobtracker}
+       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?Задайте RABBITMQ_PASSWORD в .env}
+@@ -84,8 +99,9 @@ services:
+   worker:
+     <<: *backend
+     container_name: job-tracker-worker
++    mem_limit: 384m
+     # -E включает события задач: без них celery-exporter не видит метрики задач
+-    command: celery -A app.celery_app.celery_app worker --loglevel=info -E
++    command: celery -A app.celery_app.celery_app worker --loglevel=info -E --concurrency=2
+     depends_on:
+       db:
+         condition: service_healthy
+@@ -97,6 +113,7 @@ services:
+   history-consumer:
+     <<: *backend
+     container_name: job-tracker-history-consumer
++    mem_limit: 256m
+     command: python -m app.kafka.consumers.history
+     depends_on:
+       redis:
+@@ -107,6 +124,7 @@ services:
+   insights-consumer:
+     <<: *backend
+     container_name: job-tracker-insights-consumer
++    mem_limit: 256m
+     command: python -m app.kafka.consumers.insights
+     depends_on:
+       redis:
+@@ -117,7 +135,9 @@ services:
+   kafka:
+     image: apache/kafka:4.1.0
+     container_name: job-tracker-kafka
++    mem_limit: 768m
+     restart: unless-stopped
++    logging: *logging
+     ports:
+       - "127.0.0.1:9092:9092"
+     environment:
+@@ -154,7 +174,10 @@ services:
+   prometheus:
+     image: prom/prometheus:latest
+     container_name: job-tracker-prometheus
++    mem_limit: 256m
++    profiles: ["monitoring"]
+     restart: unless-stopped
++    logging: *logging
+     command:
+       - "--config.file=/etc/prometheus/prometheus.yml"
+       - "--storage.tsdb.retention.time=15d"
+@@ -167,7 +190,10 @@ services:
+   grafana:
+     image: grafana/grafana:latest
+     container_name: job-tracker-grafana
++    mem_limit: 256m
++    profiles: ["monitoring"]
+     restart: unless-stopped
++    logging: *logging
+     environment:
+       GF_SECURITY_ADMIN_USER: admin
+       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:?Задайте GRAFANA_PASSWORD в .env}
+@@ -184,7 +210,10 @@ services:
+   redis-exporter:
+     image: oliver006/redis_exporter:latest
+     container_name: job-tracker-redis-exporter
++    mem_limit: 128m
++    profiles: ["monitoring"]
+     restart: unless-stopped
++    logging: *logging
+     environment:
+       REDIS_ADDR: redis://redis:6379
+     depends_on:
+@@ -194,7 +223,10 @@ services:
+   postgres-exporter:
+     image: quay.io/prometheuscommunity/postgres-exporter:latest
+     container_name: job-tracker-postgres-exporter
++    mem_limit: 128m
++    profiles: ["monitoring"]
+     restart: unless-stopped
++    logging: *logging
+     environment:
+       DATA_SOURCE_NAME: "postgresql://postgres:${POSTGRES_PASSWORD}@db:5432/job_tracker?sslmode=disable"
+     depends_on:
+@@ -204,7 +236,10 @@ services:
+   celery-exporter:
+     image: ovalmoney/celery-exporter:latest
+     container_name: job-tracker-celery-exporter
++    mem_limit: 128m
++    profiles: ["monitoring"]
+     restart: unless-stopped
++    logging: *logging
+     command:
+       - "--broker-url=amqp://${RABBITMQ_USER:-jobtracker}:${RABBITMQ_PASSWORD}@rabbitmq:5672//"
+     depends_on:
+@@ -216,7 +251,9 @@ services:
+   caddy:
+     image: caddy:2
+     container_name: job-tracker-caddy
++    mem_limit: 128m
+     restart: unless-stopped
++    logging: *logging
+     profiles: ["prod"]
+     environment:
+       DOMAIN: ${DOMAIN:-localhost}
+diff --git a/rabbitmq.conf b/rabbitmq.conf
+index de884b9..d931073 100644
+--- a/rabbitmq.conf
++++ b/rabbitmq.conf
+@@ -1,2 +1,3 @@
+ deprecated_features.permit.transient_nonexcl_queues = true
+-prometheus.return_per_object_metrics = true
+\ No newline at end of file
++prometheus.return_per_object_metrics = true
++vm_memory_high_watermark.absolute = 384MiB
+diff --git a/requirements.txt b/requirements.txt
+deleted file mode 100644
+index 2b79711..0000000
+--- a/requirements.txt
++++ /dev/null
+@@ -1,73 +0,0 @@
+-agent-detector==2.0.0
+-alembic==1.20.0
+-annotated-doc==0.0.5
+-annotated-types==0.8.0
+-anyio==4.15.1
+-asyncpg==0.32.0
+-certifi==2026.10.18
+-charset-normalizer==3.5.2
+-click==8.5.0
+-detect-installer==0.2.1
+-dnspython==2.9.0
+-email-validator==2.3.0
+-fastapi==0.149.0
+-fastapi-cli==0.0.32
+-fastapi-cloud-cli==0.26.0
+-fastar==0.12.0
+-googleapis-common-protos==1.75.5
+-greenlet==3.5.6
+-h11==0.16.0
+-httpcore==1.0.9
+-httpcore2==2.14.0
+-httptools==0.9.0
+-httpx==0.28.1
+-httpx2==2.14.0
+-idna==3.20
+-iniconfig==2.3.1
+-Jinja2==3.1.6
+-Mako==1.4.3
+-markdown-it-py==4.2.0
+-MarkupSafe==3.0.4
+-mdurl==0.1.2
+-opentelemetry-api==1.45.1
+-opentelemetry-exporter-http-transport==0.66b1
+-opentelemetry-exporter-otlp-common==0.66b1
+-opentelemetry-exporter-otlp-proto-common==1.45.1
+-opentelemetry-exporter-otlp-proto-http==1.45.1
+-opentelemetry-proto==1.45.1
+-opentelemetry-sdk==1.45.1
+-opentelemetry-semantic-conventions==0.66b1
+-packaging==26.3
+-pluggy==1.7.0
+-protobuf==7.36.2
+-psycopg==3.3.6
+-psycopg-binary==3.3.6
+-psycopg2==2.9.13
+-pydantic==2.14.1
+-pydantic-extra-types==2.11.1
+-pydantic-settings==2.16.0
+-pydantic_core==2.50.1
+-Pygments==2.21.0
+-pytest==9.1.1
+-python-dotenv==1.2.4
+-python-multipart==0.0.32
+-PyYAML==6.0.3
+-requests==2.34.2
+-rich==15.0.0
+-rich-toolkit==0.20.6
+-rignore==0.8.1
+-sentry-sdk==2.72.0
+-shellingham==1.5.4
+-SQLAlchemy==2.1.5
+-starlette==1.9.0
+-truststore==0.10.5
+-typer==0.27.3
+-typing-inspection==0.4.4
+-typing_extensions==4.16.0
+-urllib3==2.8.0
+-uvicorn==0.54.0
+-uvloop==0.23.0
+-watchfiles==1.3.0
+-websockets==17.3
+-redis>=5,<7
+-celery[redis]==5.5.3
+diff --git a/scripts/backup.sh b/scripts/backup.sh
+new file mode 100755
+index 0000000..ee66277
+--- /dev/null
++++ b/scripts/backup.sh
+@@ -0,0 +1,7 @@
++#!/usr/bin/env bash
++# Бэкап PostgreSQL: кладёт дамп в backups/ и удаляет дампы старше 14 дней.
++set -euo pipefail
++cd "$(dirname "$0")/.."
++mkdir -p backups
++docker compose exec -T db pg_dump -U postgres job_tracker | gzip > "backups/job_tracker_$(date +%F_%H%M).sql.gz"
++find backups -name '*.sql.gz' -mtime +14 -delete

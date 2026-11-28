@@ -1,0 +1,11 @@
+.git
+.env
+.env.*
+!.env.example
+.venv
+venv
+__MACOSX
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+backend/tests

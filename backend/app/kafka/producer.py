@@ -1,3 +1,4 @@
+import os
 # создаем producer для отправки сообщений в Kafka
 
 
@@ -6,7 +7,7 @@ from aiokafka import AIOKafkaProducer
 from app.kafka.schemas import JobEvent 
 
 
-KAFKA_BOOTSTRAP_SERVERS = "kafka:9092"
+KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
 
 producer: AIOKafkaProducer | None = None
 

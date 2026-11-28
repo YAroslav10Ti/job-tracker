@@ -1,3 +1,4 @@
+import os
 
 import asyncio
 import logging
@@ -11,7 +12,7 @@ from app.kafka.schemas import JobEvent
 
 logger = logging.getLogger(__name__)
 
-KAFKA_BOOTSTRAP_SERVERS = "kafka:9092"
+KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
 KAFKA_TOPIC = "jobs"
 CONSUMER_GROUP = "insights-group"
 
